@@ -247,7 +247,11 @@ export const SocratixWorkspace: React.FC = () => {
     return localStorage.getItem("socratix_use_live_ai") === "true";
   });
   const [apiKey, setApiKey] = useState<string>(() => {
-    return localStorage.getItem("socratix_gemini_key") || "";
+    return (
+      localStorage.getItem("socratix_gemini_key") ||
+      (import.meta as any).env?.VITE_GEMINI_API_KEY ||
+      ""
+    );
   });
   const [showApiKeyModal, setShowApiKeyModal] = useState<boolean>(false);
   const [tempKeyInput, setTempKeyInput] = useState<string>("");
