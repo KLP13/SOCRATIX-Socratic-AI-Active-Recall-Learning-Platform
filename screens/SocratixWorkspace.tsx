@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import SocratixNavbar from "./SocratixNavbar";
 import { useMastery } from "../src/context/MasteryContext";
+import { streamSocraticGemini } from "../src/services/geminiService";
 
 interface ChatMessage {
   id: string;
@@ -241,6 +242,17 @@ export const SocratixWorkspace: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>(topic.initialMessages);
   const [topicBreakthrough, setTopicBreakthrough] = useState<boolean>(false);
 
+  // Gemini Live AI state
+  const [isLiveMode, setIsLiveMode] = useState<boolean>(() => {
+    return localStorage.getItem("socratix_use_live_ai") === "true";
+  });
+  const [apiKey, setApiKey] = useState<string>(() => {
+    return localStorage.getItem("socratix_gemini_key") || "";
+  });
+  const [showApiKeyModal, setShowApiKeyModal] = useState<boolean>(false);
+  const [tempKeyInput, setTempKeyInput] = useState<string>("");
+  const [apiError, setApiError] = useState<string | null>(null);
+
   // Sync state when switching topics
   useEffect(() => {
     setCode(topic.initialCode);
@@ -248,9 +260,32 @@ export const SocratixWorkspace: React.FC = () => {
     setInputText("");
     setActiveNudge(1);
     setTopicBreakthrough(false);
+    setApiError(null);
   }, [selectedTopicId]);
 
-  const handleSend = () => {
+  const toggleLiveMode = (enabled: boolean) => {
+    if (enabled && !apiKey.trim()) {
+      setShowApiKeyModal(true);
+      return;
+    }
+    setIsLiveMode(enabled);
+    localStorage.setItem("socratix_use_live_ai", enabled.toString());
+  };
+
+  const handleSaveApiKey = () => {
+    const cleaned = tempKeyInput.trim();
+    if (cleaned) {
+      setApiKey(cleaned);
+      localStorage.setItem("socratix_gemini_key", cleaned);
+      setIsLiveMode(true);
+      localStorage.setItem("socratix_use_live_ai", "true");
+      setShowApiKeyModal(false);
+      setTempKeyInput("");
+      setApiError(null);
+    }
+  };
+
+  const handleSend = async () => {
     if (!inputText.trim()) return;
 
     const userText = inputText.trim();
@@ -263,7 +298,78 @@ export const SocratixWorkspace: React.FC = () => {
     setMessages((prev) => [...prev, userMsg]);
     setInputText("");
     setIsTyping(true);
+    setApiError(null);
 
+    // If Live Gemini Mode is active
+    if (isLiveMode && apiKey) {
+      const aiMsgId = (Date.now() + 1).toString();
+      let streamedResponse = "";
+
+      // Add a placeholder message for streaming
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: aiMsgId,
+          sender: "ai",
+          text: "...",
+        },
+      ]);
+
+      try {
+        await streamSocraticGemini(
+          apiKey,
+          userText,
+          {
+            topicTitle: topic.title,
+            category: topic.category,
+            problemPrompt: topic.problemPrompt,
+            studentCode: code,
+            chatHistory: messages,
+          },
+          (accumulated) => {
+            streamedResponse = accumulated;
+            setMessages((prev) =>
+              prev.map((m) => (m.id === aiMsgId ? { ...m, text: accumulated } : m))
+            );
+          }
+        );
+
+        // Check for breakthrough keywords in Gemini's response
+        const lowerRes = streamedResponse.toLowerCase();
+        if (
+          lowerRes.includes("breakthrough") ||
+          lowerRes.includes("aha") ||
+          lowerRes.includes("spot on") ||
+          lowerRes.includes("bingo") ||
+          topic.breakthroughKeywords.some((kw) => userText.toLowerCase().includes(kw))
+        ) {
+          setTopicBreakthrough(true);
+          triggerBreakthrough();
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === aiMsgId ? { ...m, isBreakthrough: true } : m
+            )
+          );
+        }
+      } catch (err: any) {
+        setApiError(err.message || "Failed to reach Gemini API. Falling back to Demo Mode.");
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === aiMsgId
+              ? {
+                  ...m,
+                  text: `⚠️ Live Gemini API Notice: ${err.message || "Request error"}. You can switch to Instant Demo Mode anytime.`,
+                }
+              : m
+          )
+        );
+      } finally {
+        setIsTyping(false);
+      }
+      return;
+    }
+
+    // Default: Instant Socratic Reasoning Demo Engine
     const lower = userText.toLowerCase();
 
     setTimeout(() => {
@@ -355,6 +461,75 @@ export const SocratixWorkspace: React.FC = () => {
     <div className="min-h-screen bg-[#fafbfc] text-slate-900 font-sans">
       <SocratixNavbar />
 
+      {/* API Key Modal */}
+      {showApiKeyModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 animate-fadeIn">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-7 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">🤖</span>
+                <h3 className="font-serif text-lg font-bold text-slate-900">
+                  Connect Google Gemini 1.5
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowApiKeyModal(false)}
+                className="text-slate-400 hover:text-slate-700 text-lg cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="mt-3 text-xs text-slate-600 leading-relaxed">
+              Enter your Google AI Studio API Key to unlock real-time streaming Socratic tutoring on any arbitrary code or math input.
+            </p>
+
+            <div className="mt-4">
+              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block mb-1">
+                Gemini API Key
+              </label>
+              <input
+                type="password"
+                value={tempKeyInput}
+                onChange={(e) => setTempKeyInput(e.target.value)}
+                placeholder="AIzaSy..."
+                className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3.5 py-2.5 text-xs text-slate-900 outline-none focus:border-blue-600 focus:bg-white transition"
+              />
+              <span className="mt-1.5 block text-[11px] text-slate-500">
+                Key is stored locally in your browser.{" "}
+                <a
+                  href="https://aistudio.google.com/app/apikey"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-blue-600 underline font-semibold"
+                >
+                  Get free key here →
+                </a>
+              </span>
+            </div>
+
+            <div className="mt-6 flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setShowApiKeyModal(false)}
+                className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveApiKey}
+                disabled={!tempKeyInput.trim()}
+                className="rounded-xl bg-blue-600 px-5 py-2 text-xs font-bold text-white hover:bg-blue-700 transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              >
+                Save & Enable Live AI
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <main className="mx-auto max-w-7xl px-6 py-8 sm:px-8">
         {/* Topic Selector Tabs (Multi-Topic Switcher) */}
         <div className="mb-6 flex flex-wrap items-center justify-between gap-4 border-b border-slate-200/80 pb-5">
@@ -411,17 +586,43 @@ export const SocratixWorkspace: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-3">
-            <span
-              className={`rounded-full px-3.5 py-1 text-xs font-semibold border ${
-                selectedTopicId === "bst" && nodes.bst.status === "mastery"
-                  ? "bg-emerald-100 text-emerald-800 border-emerald-200"
-                  : "bg-amber-100 text-amber-800 border-amber-200"
-              }`}
-            >
-              {selectedTopicId === "bst" && nodes.bst.status === "mastery"
-                ? "Mastered 🟢"
-                : "Diagnostic Mode 🟡"}
-            </span>
+            {/* Live AI Mode Toggle Pills */}
+            <div className="flex items-center rounded-xl border border-slate-200 bg-slate-100/80 p-1 text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => toggleLiveMode(false)}
+                className={`rounded-lg px-3 py-1 transition cursor-pointer ${
+                  !isLiveMode
+                    ? "bg-white text-slate-900 shadow-xs font-bold"
+                    : "text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                ⚡ Instant Demo
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleLiveMode(true)}
+                className={`flex items-center gap-1.5 rounded-lg px-3 py-1 transition cursor-pointer ${
+                  isLiveMode
+                    ? "bg-blue-600 text-white shadow-xs font-bold"
+                    : "text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                <span>🤖 Live Gemini 1.5</span>
+                {isLiveMode && apiKey && <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />}
+              </button>
+            </div>
+
+            {isLiveMode && (
+              <button
+                type="button"
+                onClick={() => setShowApiKeyModal(true)}
+                title="Change or configure Gemini API Key"
+                className="rounded-xl border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 cursor-pointer"
+              >
+                🔑 Key
+              </button>
+            )}
           </div>
         </div>
 
@@ -450,6 +651,20 @@ export const SocratixWorkspace: React.FC = () => {
                 <span>→</span>
               </button>
             </div>
+          </div>
+        )}
+
+        {/* API Error Notification */}
+        {apiError && (
+          <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800 flex items-center justify-between">
+            <span>{apiError}</span>
+            <button
+              type="button"
+              onClick={() => toggleLiveMode(false)}
+              className="text-xs font-bold text-rose-900 underline ml-2 cursor-pointer"
+            >
+              Switch to Demo Mode
+            </button>
           </div>
         )}
 
@@ -525,10 +740,12 @@ export const SocratixWorkspace: React.FC = () => {
               <div className="flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-2.5 text-xs font-medium text-amber-900 mb-5">
                 <div className="flex items-center gap-2">
                   <span>🛡️</span>
-                  <span><strong>Socratic Rule:</strong> Answers withheld to provoke active deduction.</span>
+                  <span>
+                    <strong>Socratic Rule:</strong> Answers withheld. Guided step-by-step.
+                  </span>
                 </div>
                 <span className="text-[11px] bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-bold">
-                  Anti-Cheating
+                  {isLiveMode ? "Gemini 1.5 Active 🤖" : "Anti-Cheating"}
                 </span>
               </div>
 
@@ -560,7 +777,9 @@ export const SocratixWorkspace: React.FC = () => {
                   <div className="flex justify-start">
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500 italic flex items-center gap-2">
                       <span className="h-2 w-2 rounded-full bg-blue-600 animate-ping" />
-                      Socratix is formulating a diagnostic inquiry...
+                      {isLiveMode
+                        ? "Gemini 1.5 Pro is analyzing your logic under Socratic constraints..."
+                        : "Socratix is formulating a diagnostic inquiry..."}
                     </div>
                   </div>
                 )}
@@ -626,7 +845,11 @@ export const SocratixWorkspace: React.FC = () => {
                   type="text"
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
-                  placeholder="Explain your deduction or proposal..."
+                  placeholder={
+                    isLiveMode
+                      ? "Ask Gemini a question or explain your reasoning..."
+                      : "Explain your deduction or proposal..."
+                  }
                   className="flex-1 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition"
                 />
                 <button
