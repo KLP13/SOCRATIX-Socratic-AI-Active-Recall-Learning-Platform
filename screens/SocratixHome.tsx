@@ -127,10 +127,10 @@ export const SocratixHome: React.FC = () => {
           })}
 
           <Link
-            to="/workspace"
-            className="ml-auto inline-flex items-center gap-2 rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 transition"
+            to={`/learn/${activeDemo.id === "dsa" ? "bst" : activeDemo.id === "calc" ? "calculus" : "system_design"}`}
+            className="ml-auto inline-flex items-center gap-2 rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 transition cursor-pointer"
           >
-            Open Interactive Workspace →
+            Open Interactive Workspace ({activeDemo.label.replace(" demo", "")}) →
           </Link>
         </div>
 
